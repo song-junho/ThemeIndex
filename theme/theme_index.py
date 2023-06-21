@@ -42,17 +42,19 @@ class ThemeIndex:
 
         monthly_index = deque([])
 
+        limit_len = len(self.dict_df_stock["005930"].loc[eos:eom]) * 0.8
         for cmp_cd in list_cmp_cd:
-            df_stock = self.dict_theme_cmp[theme][cmp_cd][["Close"]]
+            df_stock = self.dict_theme_cmp[theme][cmp_cd]
             df_stock = df_stock.loc[eos:eom]
+            df_stock = df_stock[df_stock["Volume"] > 0] # 거래 정지 구간 제외
 
-            # 당월 데이터가 15영업일 미만인 종목은 제외
-            if len(df_stock) < 15:
+            # 당월 데이터가 삼성전자 영업일*0.8 미만인 종목은 제외
+            if len(df_stock) < limit_len:
                 continue
             else:
                 df_stock["Close"] = df_stock["Close"] / df_stock["Close"].iloc[0]
 
-            monthly_index.append(df_stock)
+            monthly_index.append(df_stock[["Close"]])
 
         if len(monthly_index) == 0:
             return
