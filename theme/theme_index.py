@@ -12,6 +12,9 @@ import copy
 from functools import reduce
 import exchange_calendars as ecals
 import gc
+from db import *
+from datetime import timedelta
+import pyarrow as pa
 
 
 import warnings
@@ -49,6 +52,29 @@ class ThemeIndex:
         # 테마 키워드
         self.df_cmp_keyword = pd.read_excel(r"D:\MyProject\Notion\키워드_사전.xlsx", dtype="str")
 
+    def get_df_stock(self, cmp_cd, som, eom):
+        '''
+        Redis 캐시 자원 활용
+         . 특정 기간 범위 종목 데이터 저장 및 반환
+        :param cmp_cd:
+        :param som:
+        :param eom:
+        :return:
+        '''
+
+        key_nm = cmp_cd+str(som)+str(eom)
+
+        df_stock = redis_client.get(key_nm)
+        if df_stock is None:
+
+            df_stock = self.dict_df_stock[cmp_cd]
+            df_stock = df_stock.loc[som:eom]
+            df_stock = df_stock[df_stock["Volume"] > 0]
+
+            redis_client.set(key_nm, df_stock, timedelta(minutes=3))
+
+        return df_stock
+
     def insert_monthly_theme_index(self, list_cmp_cd, theme, som, eom):
 
         monthly_index = deque([])
@@ -56,9 +82,11 @@ class ThemeIndex:
         limit_len = len(list(filter(lambda x: x if (x > som) & (x < eom) else None, XKRX.schedule.index)))
 
         for cmp_cd in list_cmp_cd:
-            df_stock = self.dict_theme_cmp[theme][cmp_cd]
-            df_stock = df_stock.loc[som:eom]
-            df_stock = df_stock[df_stock["Volume"] > 0] # 거래 정지 구간 제외
+            # df_stock = self.dict_theme_cmp[theme][cmp_cd]
+            # df_stock = df_stock.loc[som:eom]
+            # df_stock = df_stock[df_stock["Volume"] > 0] # 거래 정지 구간 제외
+
+            df_stock = self.get_df_stock(cmp_cd, som, eom)
 
             # 당월 데이터가 삼성전자 영업일*0.8 미만인 종목은 제외
             if len(df_stock) < limit_len:
@@ -134,9 +162,6 @@ class ThemeIndex:
 
             for cmp_cd in list_cmp_cd:
                 self.dict_theme_cmp[theme][cmp_cd] = self.dict_df_stock[cmp_cd]
-
-        del self.dict_df_stock
-        gc.collect()
 
         # 테마 월별 구간 수익률 적재용 , dict_monthly_theme_index 초기화
         for theme in (self.dict_theme_cmp.keys()):
