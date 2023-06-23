@@ -22,3 +22,9 @@
 ![image](https://github.com/song-junho/ThemeIndex/assets/67362481/9227b7fb-9e35-428f-b929-c12f7e2ec646)
 
 ### 2. Macro 상관관계
+ - 모델 학습 진행
+   - x 변수: Macro pct_change(1m, 3m, 6m, 12m) or Macro 2year look back window z_score
+   - y 변수: Theme 1M pct_change , (* shift 를 통해 +1달, +2달 등 조정)
+     - 변화율의 범위로 분류 클래스 생성 ("1", "0", "-1")
+   - 모델: SVC(SoftVectorClassifier) , RandomFroest , (?)
+     
