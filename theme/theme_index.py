@@ -10,16 +10,21 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, wait
 import copy
 from functools import reduce
+import exchange_calendars as ecals
+import gc
+
 
 import warnings
 warnings.filterwarnings('ignore')
 
+# 한국장 영업일
+XKRX = ecals.get_calendar("XKRX")
 
 class ThemeIndex:
 
     def __init__(self, start_date, end_date):
 
-        self.list_date_eos = pd.date_range(start=start_date, end=end_date, freq="MS")
+        self.list_date_som = pd.date_range(start=start_date, end=end_date, freq="MS")
         self.list_date_eom = pd.date_range(start=start_date, end=end_date, freq="M")
 
         # 테마 인덱스
@@ -31,6 +36,9 @@ class ThemeIndex:
         # 테마별 종목 가격 데이터
         self.dict_theme_cmp = {}
 
+        # 한국장 영업일
+        self.list_krx_date = XKRX.schedule.index
+
         # Thread Lock
         self._lock = threading.Lock()
 
@@ -41,14 +49,15 @@ class ThemeIndex:
         # 테마 키워드
         self.df_cmp_keyword = pd.read_excel(r"D:\MyProject\Notion\키워드_사전.xlsx", dtype="str")
 
-    def insert_monthly_theme_index(self, list_cmp_cd, theme, eos, eom):
+    def insert_monthly_theme_index(self, list_cmp_cd, theme, som, eom):
 
         monthly_index = deque([])
 
-        limit_len = len(self.dict_df_stock["005930"].loc[eos:eom]) * 0.8
+        limit_len = len(list(filter(lambda x: x if (x > som) & (x < eom) else None, XKRX.schedule.index)))
+
         for cmp_cd in list_cmp_cd:
             df_stock = self.dict_theme_cmp[theme][cmp_cd]
-            df_stock = df_stock.loc[eos:eom]
+            df_stock = df_stock.loc[som:eom]
             df_stock = df_stock[df_stock["Volume"] > 0] # 거래 정지 구간 제외
 
             # 당월 데이터가 삼성전자 영업일*0.8 미만인 종목은 제외
@@ -66,16 +75,16 @@ class ThemeIndex:
             df["index"] = df.mean(axis='columns')
             self.dict_monthly_theme_index[theme].append(df[["index"]])
 
-    def thread_theme(self, list_theme, eos, eom):
+    def thread_theme(self, list_theme, som, eom):
 
         # 테마 인덱싱 스레드 함수
         for theme in list_theme:
-            self.insert_monthly_theme_index(self.dict_theme_cmp[theme].keys(), theme, eos, eom)
+            self.insert_monthly_theme_index(self.dict_theme_cmp[theme].keys(), theme, som, eom)
 
     def make_theme_index(self):
 
         # 월별 인덱스 생성
-        for eos, eom in tqdm(zip(self.list_date_eos, self.list_date_eom), total=len(self.list_date_eos)):
+        for som, eom in tqdm(zip(self.list_date_som, self.list_date_eom), total=len(self.list_date_som)):
 
             n = 100
             list_theme_t = sorted(self.dict_theme_cmp.keys())
@@ -85,7 +94,7 @@ class ThemeIndex:
             with ThreadPoolExecutor(max_workers=5) as executor:
 
                 for list_theme in list_theme_t:
-                    threads.append(executor.submit(self.thread_theme, list_theme, eos, eom))
+                    threads.append(executor.submit(self.thread_theme, list_theme, som, eom))
                 wait(threads)
 
     def index_strapping(self):
@@ -125,6 +134,9 @@ class ThemeIndex:
 
             for cmp_cd in list_cmp_cd:
                 self.dict_theme_cmp[theme][cmp_cd] = self.dict_df_stock[cmp_cd]
+
+        del self.dict_df_stock
+        gc.collect()
 
         # 테마 월별 구간 수익률 적재용 , dict_monthly_theme_index 초기화
         for theme in (self.dict_theme_cmp.keys()):
