@@ -36,8 +36,14 @@ class ThemeIndex:
         # 테마 인덱스 (월별 구간 수익률)
         self.dict_monthly_theme_index = {}
 
-        # 테마별 종목 가격 데이터
-        self.dict_theme_cmp = {}
+        # 테마 키워드
+        self.df_cmp_keyword = pd.read_excel(r"D:\MyProject\Notion\키워드_사전.xlsx", dtype="str")
+
+        # 테마 리스트
+        self.list_theme = self.set_list_theme()
+
+        # 테마-종목 key-value
+        self.dict_theme_list_cmp = self.set_dict_theme_list_cmp()
 
         # 한국장 영업일
         self.list_krx_date = XKRX.schedule.index
@@ -49,8 +55,21 @@ class ThemeIndex:
         with open(r"D:\MyProject\StockPrice\DictDfStock.pickle", 'rb') as fr:
             self.dict_df_stock = pickle.load(fr)
 
-        # 테마 키워드
-        self.df_cmp_keyword = pd.read_excel(r"D:\MyProject\Notion\키워드_사전.xlsx", dtype="str")
+    def set_list_theme(self):
+
+        df = self.df_cmp_keyword.groupby("keyword").count()
+        df = (df[df["cmp_cd"] >= 5])
+
+        return sorted(list(df[df["cmp_cd"] > 4].index))
+
+    def set_dict_theme_list_cmp(self):
+
+        dict_theme_list_cmp = {}
+
+        for theme in self.list_theme:
+            dict_theme_list_cmp[theme] = self.df_cmp_keyword[self.df_cmp_keyword["keyword"] == theme]["cmp_cd"].to_list()
+
+        return dict_theme_list_cmp
 
     def get_df_stock(self, cmp_cd, som, eom):
         '''
@@ -64,14 +83,9 @@ class ThemeIndex:
 
         key_nm = cmp_cd+str(som)+str(eom)
 
-        df_stock = redis_client.get(key_nm)
-        if df_stock is None:
-
-            df_stock = self.dict_df_stock[cmp_cd]
-            df_stock = df_stock.loc[som:eom]
-            df_stock = df_stock[df_stock["Volume"] > 0]
-
-            redis_client.set(key_nm, df_stock, timedelta(minutes=3))
+        df_stock = self.dict_df_stock[cmp_cd]
+        df_stock = df_stock.loc[som:eom]
+        df_stock = df_stock[df_stock["Volume"] > 0]
 
         return df_stock
 
@@ -82,9 +96,6 @@ class ThemeIndex:
         limit_len = len(list(filter(lambda x: x if (x > som) & (x < eom) else None, XKRX.schedule.index)))
 
         for cmp_cd in list_cmp_cd:
-            # df_stock = self.dict_theme_cmp[theme][cmp_cd]
-            # df_stock = df_stock.loc[som:eom]
-            # df_stock = df_stock[df_stock["Volume"] > 0] # 거래 정지 구간 제외
 
             df_stock = self.get_df_stock(cmp_cd, som, eom)
 
@@ -107,15 +118,15 @@ class ThemeIndex:
 
         # 테마 인덱싱 스레드 함수
         for theme in list_theme:
-            self.insert_monthly_theme_index(self.dict_theme_cmp[theme].keys(), theme, som, eom)
+            self.insert_monthly_theme_index(self.dict_theme_list_cmp[theme], theme, som, eom)
 
     def make_theme_index(self):
 
         # 월별 인덱스 생성
         for som, eom in tqdm(zip(self.list_date_som, self.list_date_eom), total=len(self.list_date_som)):
 
-            n = 100
-            list_theme_t = sorted(self.dict_theme_cmp.keys())
+            list_theme_t = self.list_theme
+            n = int(len(list_theme_t) / 5)
             list_theme_t = [list_theme_t[i * n:(i + 1) * n] for i in range((len(list_theme_t) + n - 1) // n)]
 
             threads = []
@@ -147,24 +158,8 @@ class ThemeIndex:
 
     def create_theme_index(self):
 
-        # 인덱스 생성용 키워드 선별
-        df = self.df_cmp_keyword.groupby("keyword").count()
-        df = (df[df["cmp_cd"] >= 5])
-        list_theme = list(df[df["cmp_cd"] > 4].index)
-
-        df_theme = self.df_cmp_keyword[self.df_cmp_keyword["keyword"].isin(list_theme)]
-
-        # 테마 내 종목별 가격데이터 생성
-        for theme in tqdm(list_theme):
-
-            list_cmp_cd = df_theme[df_theme["keyword"] == theme]["cmp_cd"].to_list()
-            self.dict_theme_cmp[theme] = {}
-
-            for cmp_cd in list_cmp_cd:
-                self.dict_theme_cmp[theme][cmp_cd] = self.dict_df_stock[cmp_cd]
-
         # 테마 월별 구간 수익률 적재용 , dict_monthly_theme_index 초기화
-        for theme in (self.dict_theme_cmp.keys()):
+        for theme in self.list_theme:
             self.dict_monthly_theme_index[theme] = deque([])
 
         # 테마 인덱스 생성
@@ -173,9 +168,9 @@ class ThemeIndex:
         # 월별 구간 수익률 strapping
         self.index_strapping()
 
-        # 저장
-        with open(r'D:\MyProject\StockPrice\DictThemeIndex.pickle', 'wb') as fw:
-            pickle.dump(self.dict_theme_index, fw)
+        # # 저장
+        # with open(r'D:\MyProject\StockPrice\DictThemeIndex.pickle', 'wb') as fw:
+        #     pickle.dump(self.dict_theme_index, fw)
 
 
 class ThemeChgFreq:
