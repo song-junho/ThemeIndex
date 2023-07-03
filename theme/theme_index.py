@@ -11,10 +11,9 @@ from concurrent.futures import ThreadPoolExecutor, wait
 import copy
 from functools import reduce
 import exchange_calendars as ecals
-import gc
+from multiprocessing import Pool
 from db import *
 from datetime import timedelta
-import pyarrow as pa
 
 
 import warnings
@@ -48,9 +47,6 @@ class ThemeIndex:
         # 한국장 영업일
         self.list_krx_date = XKRX.schedule.index
 
-        # Thread Lock
-        self._lock = threading.Lock()
-
         # 가격 Dictionary 생성
         with open(r"D:\MyProject\StockPrice\DictDfStock.pickle", 'rb') as fr:
             self.dict_df_stock = pickle.load(fr)
@@ -81,15 +77,19 @@ class ThemeIndex:
         :return:
         '''
 
-        key_nm = cmp_cd+str(som)+str(eom)
+        key_nm = cmp_cd + str(som) + str(eom)
 
-        df_stock = self.dict_df_stock[cmp_cd]
-        df_stock = df_stock.loc[som:eom]
-        df_stock = df_stock[df_stock["Volume"] > 0]
+        df_stock = redis_client.get(key_nm)
+        if df_stock is None:
+            df_stock = self.dict_df_stock[cmp_cd]
+            df_stock = df_stock.loc[som:eom]
+            df_stock = df_stock[df_stock["Volume"] > 0]
+
+            redis_client.set(key_nm, df_stock, timedelta(minutes=3))
 
         return df_stock
 
-    def insert_monthly_theme_index(self, list_cmp_cd, theme, som, eom):
+    def insert_monthly_theme_index(self, list_cmp_cd, theme, som, eom, dict_monthly_theme_index):
 
         monthly_index = deque([])
 
@@ -112,29 +112,43 @@ class ThemeIndex:
         else:
             df = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True), monthly_index)
             df["index"] = df.mean(axis='columns')
-            self.dict_monthly_theme_index[theme].append(df[["index"]])
+            dict_monthly_theme_index[theme].append(df[["index"]])
 
-    def thread_theme(self, list_theme, som, eom):
+    def thread_theme(self, list_theme):
+
+        # 테마 월별 구간 수익률 적재용 , dict_monthly_theme_index 초기화
+        dict_monthly_theme_index = {}
+        for theme in list_theme:
+            dict_monthly_theme_index[theme] = deque([])
 
         # 테마 인덱싱 스레드 함수
-        for theme in list_theme:
-            self.insert_monthly_theme_index(self.dict_theme_list_cmp[theme], theme, som, eom)
+        for som, eom in tqdm(zip(self.list_date_som, self.list_date_eom), total=len(self.list_date_som)):
+
+            for theme in list_theme:
+                self.insert_monthly_theme_index(self.dict_theme_list_cmp[theme], theme, som, eom, dict_monthly_theme_index)
+
+        # 각 프로세스가 종료되면 별도의 heap에서 변형된 데이터도 소멸되기 떄문에 반환한다.
+        return dict_monthly_theme_index
+
+
 
     def make_theme_index(self):
 
+        list_theme_t = self.list_theme
+        n = int(len(list_theme_t) / 3)
+        list_theme_t = [list_theme_t[i * n:(i + 1) * n] for i in range((len(list_theme_t) + n - 1) // n)]
+        p = Pool(len(list_theme_t))
+
         # 월별 인덱스 생성
-        for som, eom in tqdm(zip(self.list_date_som, self.list_date_eom), total=len(self.list_date_som)):
+        res = p.map_async(self.thread_theme, list_theme_t)
 
-            list_theme_t = self.list_theme
-            n = int(len(list_theme_t) / 5)
-            list_theme_t = [list_theme_t[i * n:(i + 1) * n] for i in range((len(list_theme_t) + n - 1) // n)]
+        # dictionary 병합
+        for x in res.get():
+            self.dict_monthly_theme_index.update(x)
 
-            threads = []
-            with ThreadPoolExecutor(max_workers=5) as executor:
+        p.close()
+        p.join()
 
-                for list_theme in list_theme_t:
-                    threads.append(executor.submit(self.thread_theme, list_theme, som, eom))
-                wait(threads)
 
     def index_strapping(self):
 
@@ -168,9 +182,9 @@ class ThemeIndex:
         # 월별 구간 수익률 strapping
         self.index_strapping()
 
-        # # 저장
-        # with open(r'D:\MyProject\StockPrice\DictThemeIndex.pickle', 'wb') as fw:
-        #     pickle.dump(self.dict_theme_index, fw)
+        # 저장
+        with open(r'D:\MyProject\StockPrice\DictThemeIndex.pickle', 'wb') as fw:
+            pickle.dump(self.dict_theme_index, fw)
 
 
 class ThemeChgFreq:
