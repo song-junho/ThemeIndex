@@ -1,7 +1,8 @@
 from theme import theme_index
+from datetime import datetime
 
-start_date = "2006-01-01"
-end_date   = "2023-06-30"
+start_date = datetime(2006, 1, 1)
+end_date   = datetime.today()
 
 if __name__ == "__main__":
 

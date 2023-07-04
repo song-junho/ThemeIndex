@@ -3,11 +3,8 @@ import pandas as pd
 import pickle
 
 from tqdm import tqdm
-from functools import reduce
 from collections import deque
-import warnings
-import threading
-from concurrent.futures import ThreadPoolExecutor, wait
+from dateutil.relativedelta import relativedelta
 import copy
 from functools import reduce
 import exchange_calendars as ecals
@@ -27,7 +24,7 @@ class ThemeIndex:
     def __init__(self, start_date, end_date):
 
         self.list_date_som = pd.date_range(start=start_date, end=end_date, freq="MS")
-        self.list_date_eom = pd.date_range(start=start_date, end=end_date, freq="M")
+        self.list_date_eom = pd.date_range(start=start_date, end=(end_date + relativedelta(months=1)), freq="M")
 
         # 테마 인덱스
         self.dict_theme_index = {}
@@ -99,8 +96,10 @@ class ThemeIndex:
 
             df_stock = self.get_df_stock(cmp_cd, som, eom)
 
-            # 당월 데이터가 삼성전자 영업일*0.8 미만인 종목은 제외
-            if len(df_stock) < limit_len:
+            # 당월 데이터가 KRX 영업일*0.8 미만인 종목은 제외
+            if (len(df_stock) < limit_len * 0.8) & (eom != self.list_date_eom[-1]):
+                continue
+            elif len(df_stock) == 0:
                 continue
             else:
                 df_stock["Close"] = df_stock["Close"] / df_stock["Close"].iloc[0]
@@ -110,7 +109,7 @@ class ThemeIndex:
         if len(monthly_index) == 0:
             return
         else:
-            df = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True), monthly_index)
+            df = reduce(lambda left, right: pd.merge(left, right, left_index=True, right_index=True, how="left"), monthly_index)
             df["index"] = df.mean(axis='columns')
             dict_monthly_theme_index[theme].append(df[["index"]])
 
